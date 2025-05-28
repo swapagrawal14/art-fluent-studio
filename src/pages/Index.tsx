@@ -1,11 +1,12 @@
 
-import React, { useState, useRef, useCallback } from 'react';
-import { Upload, Image as ImageIcon, Wand2, Download, Key, Loader2, AlertCircle, CheckCircle } from 'lucide-react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
+import { Upload, Image as ImageIcon, Wand2, Download, Key, Loader2, AlertCircle, CheckCircle, Moon, Sun, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Switch } from '@/components/ui/switch';
 
 const Index = () => {
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
@@ -16,15 +17,71 @@ const Index = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [status, setStatus] = useState<{ type: 'success' | 'error' | 'info' | null; message: string }>({ type: null, message: '' });
   const [mode, setMode] = useState<'text-to-image' | 'image-to-image'>('text-to-image');
+  const [isDarkMode, setIsDarkMode] = useState(() => localStorage.getItem('dark-mode') === 'true');
+  const [autoEnhancePrompt, setAutoEnhancePrompt] = useState(() => localStorage.getItem('auto-enhance') === 'true');
+  const [isEnhancing, setIsEnhancing] = useState(false);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragCounter = useRef(0);
   const [isDragging, setIsDragging] = useState(false);
 
+  // Apply dark mode
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+    localStorage.setItem('dark-mode', isDarkMode.toString());
+  }, [isDarkMode]);
+
+  // Save auto enhance preference
+  useEffect(() => {
+    localStorage.setItem('auto-enhance', autoEnhancePrompt.toString());
+  }, [autoEnhancePrompt]);
+
   // Save API key to localStorage
   const handleApiKeyChange = (value: string) => {
     setApiKey(value);
     localStorage.setItem('gemini_api_key', value);
+  };
+
+  // Enhance prompt using Gemini API
+  const enhancePrompt = async (originalPrompt: string): Promise<string> => {
+    if (!apiKey.trim() || !originalPrompt.trim()) return originalPrompt;
+
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            contents: [{
+              parts: [{
+                text: `Enhance this image generation prompt to be more descriptive and artistic while keeping the original intent. Make it more detailed for better AI image generation. Original prompt: "${originalPrompt}"`
+              }]
+            }],
+            generationConfig: {
+              maxOutputTokens: 200,
+              temperature: 0.7
+            }
+          })
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        const enhancedText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        return enhancedText || originalPrompt;
+      }
+    } catch (error) {
+      console.log('Prompt enhancement failed, using original prompt');
+    }
+    
+    return originalPrompt;
   };
 
   // Convert file to base64
@@ -34,7 +91,6 @@ const Index = () => {
       reader.readAsDataURL(file);
       reader.onload = () => {
         const result = reader.result as string;
-        // Remove the data:image/jpeg;base64, prefix
         const base64 = result.split(',')[1];
         resolve(base64);
       };
@@ -49,7 +105,7 @@ const Index = () => {
       return;
     }
 
-    if (file.size > 10 * 1024 * 1024) { // 10MB limit
+    if (file.size > 10 * 1024 * 1024) {
       setStatus({ type: 'error', message: 'Image file size must be less than 10MB' });
       return;
     }
@@ -122,16 +178,26 @@ const Index = () => {
     setStatus({ type: 'info', message: 'Generating image...' });
 
     try {
+      let finalPrompt = prompt;
+      
+      // Enhance prompt if auto-enhance is enabled
+      if (autoEnhancePrompt) {
+        setIsEnhancing(true);
+        setStatus({ type: 'info', message: 'Enhancing prompt...' });
+        finalPrompt = await enhancePrompt(prompt);
+        setIsEnhancing(false);
+        setStatus({ type: 'info', message: 'Generating image...' });
+      }
+
       const requestBody: any = {
         contents: [{
           parts: [
-            { text: prompt }
+            { text: finalPrompt }
           ]
         }],
         generationConfig: { responseModalities: ["TEXT", "IMAGE"] }
       };
 
-      // Add image data for image-to-image mode
       if (mode === 'image-to-image' && uploadedImage) {
         requestBody.contents[0].parts.push({
           inline_data: {
@@ -159,7 +225,6 @@ const Index = () => {
 
       const data = await response.json();
       
-      // Find the image part in the response
       const imagePart = data.candidates?.[0]?.content?.parts?.find((part: any) => part.inlineData);
       
       if (imagePart?.inlineData?.data) {
@@ -176,6 +241,7 @@ const Index = () => {
       });
     } finally {
       setIsLoading(false);
+      setIsEnhancing(false);
     }
   };
 
@@ -185,25 +251,53 @@ const Index = () => {
     
     const link = document.createElement('a');
     link.href = `data:image/jpeg;base64,${generatedImage}`;
-    link.download = `gemini-generated-${Date.now()}.jpg`;
+    link.download = `swap-creations-${Date.now()}.jpg`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 p-4">
-      <div className="max-w-6xl mx-auto">
-        {/* Header */}
-        <div className="text-center mb-8">
-          <h1 className="text-5xl font-bold text-white mb-4 bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
-            AI Image Studio
-          </h1>
-          <p className="text-xl text-purple-200">
-            Create and transform images with Google's Gemini 2.0 Flash
-          </p>
+    <div className={`min-h-screen transition-colors duration-300 ${
+      isDarkMode 
+        ? 'bg-gradient-to-br from-gray-900 via-purple-900 to-indigo-900' 
+        : 'bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900'
+    }`}>
+      {/* Navbar */}
+      <nav className="bg-black/20 backdrop-blur-lg border-b border-white/10">
+        <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <div className="w-8 h-8 bg-gradient-to-r from-purple-500 to-pink-500 rounded-lg flex items-center justify-center">
+              <Wand2 className="w-5 h-5 text-white" />
+            </div>
+            <h1 className="text-xl font-bold text-white">Swap Creations</h1>
+          </div>
+          
+          <div className="flex items-center space-x-4">
+            {/* Auto Enhance Toggle */}
+            <div className="flex items-center space-x-2">
+              <Sparkles className="w-4 h-4 text-purple-300" />
+              <span className="text-sm text-purple-200">Auto Enhance</span>
+              <Switch
+                checked={autoEnhancePrompt}
+                onCheckedChange={setAutoEnhancePrompt}
+              />
+            </div>
+            
+            {/* Dark Mode Toggle */}
+            <div className="flex items-center space-x-2">
+              <Sun className="w-4 h-4 text-yellow-400" />
+              <Switch
+                checked={isDarkMode}
+                onCheckedChange={setIsDarkMode}
+              />
+              <Moon className="w-4 h-4 text-blue-300" />
+            </div>
+          </div>
         </div>
+      </nav>
 
+      <div className="max-w-6xl mx-auto p-6">
         <div className="grid lg:grid-cols-2 gap-8">
           {/* Input Panel */}
           <div className="space-y-6">
@@ -336,7 +430,16 @@ const Index = () => {
             {/* Prompt Input */}
             <Card className="bg-white/10 backdrop-blur-lg border-white/20">
               <CardHeader>
-                <CardTitle className="text-white">Prompt</CardTitle>
+                <CardTitle className="flex items-center justify-between text-white">
+                  <span>Prompt</span>
+                  {autoEnhancePrompt && (
+                    <div className="flex items-center gap-2 text-sm text-purple-300">
+                      <Sparkles className="w-4 h-4" />
+                      Auto Enhancement: ON
+                      {isEnhancing && <Loader2 className="w-4 h-4 animate-spin" />}
+                    </div>
+                  )}
+                </CardTitle>
               </CardHeader>
               <CardContent>
                 <Textarea
@@ -350,6 +453,11 @@ const Index = () => {
                   rows={4}
                   className="bg-white/10 border-white/20 text-white placeholder-white/60 resize-none"
                 />
+                {autoEnhancePrompt && (
+                  <p className="text-xs text-purple-300 mt-2">
+                    ✨ Your prompt will be automatically enhanced for better results
+                  </p>
+                )}
               </CardContent>
             </Card>
 
@@ -362,7 +470,7 @@ const Index = () => {
               {isLoading ? (
                 <>
                   <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                  Generating...
+                  {isEnhancing ? 'Enhancing Prompt...' : 'Generating...'}
                 </>
               ) : (
                 <>
